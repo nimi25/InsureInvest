@@ -25,10 +25,10 @@ st.sidebar.markdown("## InsureInvest")
 st.sidebar.caption("Insurance Investment Analytics")
 st.sidebar.markdown("---")
 st.sidebar.markdown("### Navigation")
-st.sidebar.page_link("app.py", label="Home", icon="🏠")
-st.sidebar.page_link("pages/1_Company_Analysis.py", label="Company Analysis", icon="📈")
+if st.sidebar.button("📈  Company Analysis", use_container_width=True):
+    st.switch_page("pages/1_Company_Analysis.py")
 st.sidebar.markdown("---")
-st.sidebar.info("Use Home to build a portfolio. Use Company Analysis to inspect an individual company in detail.")
+st.sidebar.info("Use this Home page to build a portfolio. Use Company Analysis to inspect an individual company in detail.")
 
 st.markdown("""
 <div class="hero">
