@@ -73,16 +73,10 @@ def _momentum_score(df):
 
 
 def calculate_company_score(stock_close, benchmark_close, technical_df, risk_profile="Moderate"):
-    """Calculate a 0-100 investment score for one company."""
+    """Calculate raw investment metrics for one company."""
     metrics = performance_summary(stock_close, benchmark_close)
     weights = RISK_PROFILES.get(risk_profile, RISK_PROFILES["Moderate"])
 
-    return_score = float(metrics["Annual Return"])
-    sharpe_score = float(metrics["Sharpe Ratio"])
-    volatility_score = float(metrics["Annual Volatility"])
-    drawdown_score = float(metrics["Maximum Drawdown"])
-
-    # These individual values are normalized later across the full universe.
     return {
         **metrics,
         "Momentum": _momentum_score(technical_df),
@@ -115,20 +109,42 @@ def rank_companies(company_metrics, risk_profile="Moderate"):
     return df.sort_values("Investment Score", ascending=False)
 
 
-def build_portfolio(ranked_df, investment_amount, max_companies=5):
-    """Allocate capital to the highest-ranked companies using score weights."""
+def build_portfolio(ranked_df, investment_amount, max_companies=5, max_allocation=0.35):
+    """Allocate capital to top-ranked companies with a per-company diversification cap."""
     if investment_amount <= 0:
         raise ValueError("Investment amount must be greater than zero.")
+    if ranked_df.empty:
+        raise ValueError("No ranked companies are available.")
 
     selected = ranked_df.head(max_companies).copy()
     score_sum = selected["Investment Score"].sum()
 
     if score_sum <= 0:
-        selected["Allocation %"] = 100 / len(selected)
+        raw_weights = pd.Series(1 / len(selected), index=selected.index)
     else:
-        selected["Allocation %"] = selected["Investment Score"] / score_sum * 100
+        raw_weights = selected["Investment Score"] / score_sum
 
-    selected["Recommended Amount"] = investment_amount * selected["Allocation %"] / 100
+    # Cap concentration, then redistribute excess proportionally among
+    # companies that remain below the cap.
+    weights = raw_weights.copy()
+    for _ in range(20):
+        excess = (weights - max_allocation).clip(lower=0).sum()
+        if excess <= 1e-10:
+            break
+        weights = weights.clip(upper=max_allocation)
+        eligible = weights < max_allocation - 1e-10
+        if not eligible.any():
+            break
+        base = weights[eligible]
+        base_sum = base.sum()
+        if base_sum <= 0:
+            weights.loc[eligible] += excess / eligible.sum()
+        else:
+            weights.loc[eligible] += excess * base / base_sum
+
+    weights = weights / weights.sum()
+    selected["Allocation %"] = weights * 100
+    selected["Recommended Amount"] = investment_amount * weights
     return selected
 
 
