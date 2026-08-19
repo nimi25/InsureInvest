@@ -5,7 +5,7 @@ import pandas as pd
 # The broader universe is useful for portfolio screening because India has
 # relatively few separately listed pure-play insurers.
 INSURANCE_STOCKS = {
-    # Existing pure-play insurance companies
+    # Pure-play / directly listed insurance companies
     "HDFC Life": "HDFCLIFE.NS",
     "SBI Life": "SBILIFE.NS",
     "ICICI Prudential Life": "ICICIPRULI.NS",
@@ -13,11 +13,11 @@ INSURANCE_STOCKS = {
     "GIC Re": "GICRE.NS",
     "Star Health": "STARHEALTH.NS",
     "New India Assurance": "NIACL.NS",
-
-    # Additional listed insurance / insurance-linked businesses
     "ICICI Lombard General Insurance": "ICICIGI.NS",
     "Go Digit General Insurance": "GODIGIT.NS",
     "Niva Bupa Health Insurance": "NIVABUPA.NS",
+
+    # Insurance / financial-services ecosystem companies
     "Max Financial Services": "MFSL.NS",
     "Aditya Birla Capital": "ABCAPITAL.NS",
     "Bajaj Finserv": "BAJAJFINSV.NS",
@@ -31,7 +31,7 @@ INSURANCE_STOCKS = {
     "Bajaj Holdings & Investment": "BAJAJHLDNG.NS",
     "Kotak Mahindra Bank": "KOTAKBANK.NS",
     "HDFC Asset Management": "HDFCAMC.NS",
-    "SBI Funds Management / SBI-related": "SBIN.NS",
+    "State Bank of India": "SBIN.NS",
     "ICICI Bank": "ICICIBANK.NS",
     "HDFC Bank": "HDFCBANK.NS",
     "Axis Bank": "AXISBANK.NS",
@@ -39,6 +39,40 @@ INSURANCE_STOCKS = {
     "LIC Housing Finance": "LICHSGFIN.NS",
     "Can Fin Homes": "CANFINHOME.NS",
     "PNB Housing Finance": "PNBHOUSING.NS",
+}
+
+COMPANY_CATEGORIES = {
+    "HDFC Life": "Pure Insurance",
+    "SBI Life": "Pure Insurance",
+    "ICICI Prudential Life": "Pure Insurance",
+    "LIC": "Pure Insurance",
+    "GIC Re": "Pure Insurance",
+    "Star Health": "Pure Insurance",
+    "New India Assurance": "Pure Insurance",
+    "ICICI Lombard General Insurance": "Pure Insurance",
+    "Go Digit General Insurance": "Pure Insurance",
+    "Niva Bupa Health Insurance": "Pure Insurance",
+    "Max Financial Services": "Insurance-linked",
+    "Aditya Birla Capital": "Insurance-linked",
+    "Bajaj Finserv": "Insurance-linked",
+    "PB Fintech": "Insurance-linked",
+    "Medi Assist Healthcare Services": "Insurance-linked",
+    "Cholamandalam Investment & Finance": "Financial Services",
+    "Shriram Finance": "Financial Services",
+    "Muthoot Finance": "Financial Services",
+    "Manappuram Finance": "Financial Services",
+    "SBI Cards & Payment Services": "Financial Services",
+    "Bajaj Holdings & Investment": "Financial Services",
+    "Kotak Mahindra Bank": "Financial Services",
+    "HDFC Asset Management": "Financial Services",
+    "State Bank of India": "Financial Services",
+    "ICICI Bank": "Financial Services",
+    "HDFC Bank": "Financial Services",
+    "Axis Bank": "Financial Services",
+    "Bajaj Finance": "Financial Services",
+    "LIC Housing Finance": "Financial Services",
+    "Can Fin Homes": "Financial Services",
+    "PNB Housing Finance": "Financial Services",
 }
 
 # NIFTY 50 will be our benchmark
