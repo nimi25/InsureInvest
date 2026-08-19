@@ -1,214 +1,272 @@
-import re
+import math
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from scipy.optimize import minimize
+from scipy.stats import norm
 
-from analytics import performance_summary
+from analytics import performance_summary, daily_returns
 from data import BENCHMARK, INSURANCE_STOCKS, COMPANY_CATEGORIES, get_price_data
 from technicals import add_technical_indicators
 
-# ---------------------------------------------------------------------------
-# HTML rendering helper
-# ---------------------------------------------------------------------------
-def _collapse_html(markup):
-    return re.sub(r"\n\s*", "", markup.strip())
+st.set_page_config(page_title="InsureInvest — Company Analysis", page_icon="📈", layout="wide")
 
-
-def render_html(markup):
-    st.markdown(_collapse_html(markup), unsafe_allow_html=True)
-
-
-def render_sidebar_html(markup):
-    st.sidebar.markdown(_collapse_html(markup), unsafe_allow_html=True)
-
-# ---------------------------------------------------------------------------
-# Chart theming
-# ---------------------------------------------------------------------------
-DARK_CHART = dict(template="plotly_dark", paper_bgcolor="#111827", plot_bgcolor="#111827", font=dict(family="Arial", color="#ffffff"))
-DARK_GRID = "#374151"
-LEGEND_TOP = dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(color="#ffffff"))
-LEGEND_TOP_RIGHT = dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(color="#ffffff"))
-
-st.set_page_config(page_title="InsureInvest — Company Analysis", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
-
-render_html("""
+st.markdown("""
 <style>
-.stApp { background-color:#f6f8fb; }
-.block-container { padding-top:2rem; padding-bottom:3rem; max-width:1400px; }
-section[data-testid="stSidebar"] { background-color:#111827; }
-section[data-testid="stSidebar"] * { color:#f9fafb !important; }
-.hero { background:linear-gradient(135deg,#111827 0%,#1e3a5f 100%); padding:2rem 2.5rem; border-radius:18px; margin-bottom:1.5rem; }
-.hero-title { color:#fff !important; font-size:2.4rem; font-weight:700; margin:0; }
-.hero-subtitle { color:#cbd5e1 !important; font-size:1rem; margin-top:.5rem; }
-.company-name { font-size:2rem; font-weight:700; color:#111827 !important; margin-bottom:.1rem; }
-.company-meta { color:#64748b !important; font-size:.9rem; margin-bottom:1.5rem; }
-.section-title { color:#111827 !important; font-size:1.35rem; font-weight:700; margin-top:1.8rem; margin-bottom:.7rem; }
-.metric-card { background:#fff; border:1px solid #e5e7eb; border-radius:14px; padding:1.2rem 1.3rem; min-height:125px; box-shadow:0 4px 15px rgba(15,23,42,.05); }
-.metric-label { color:#64748b !important; font-size:.82rem; font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
-.metric-value { color:#111827 !important; font-size:1.8rem; font-weight:700; margin-top:.45rem; }
-.metric-description { color:#94a3b8 !important; font-size:.75rem; margin-top:.3rem; }
-.interpretation-card { background:#fff !important; border:1px solid #e2e8f0; border-left:5px solid #2563eb; border-radius:14px; padding:1.5rem 1.7rem; margin-top:.8rem; box-shadow:0 4px 15px rgba(15,23,42,.05); }
-.interpretation-card * { color:#334155 !important; }
-.interpretation-overall { color:#111827 !important; font-size:1.1rem; font-weight:700; margin-bottom:.4rem; }
-.interpretation-overall-text { color:#475569 !important; font-size:.92rem; line-height:1.6; margin-bottom:1rem; }
-.interpretation-grid { display:grid; grid-template-columns:1fr 1fr; gap:1.2rem 2rem; margin-top:1rem; }
-.interpretation-item { background:#f8fafc !important; border:1px solid #e2e8f0; border-radius:10px; padding:1rem; }
-.interpretation-label { color:#1e3a5f !important; font-weight:700; font-size:.9rem; margin-bottom:.35rem; }
-.interpretation-text { color:#475569 !important; font-size:.84rem; line-height:1.55; }
-.interpretation-note { color:#64748b !important; font-size:.75rem; margin-top:1.2rem; padding-top:.8rem; border-top:1px solid #e2e8f0; }
-.footer { text-align:center; color:#94a3b8 !important; font-size:.75rem; margin-top:3rem; padding-top:1rem; border-top:1px solid #e2e8f0; }
-@media (max-width:768px) { .interpretation-grid { grid-template-columns:1fr; } .hero-title { font-size:1.8rem; } }
+.stApp { background:#f6f8fb; }
+.block-container { max-width:1450px; padding-top:1.5rem; padding-bottom:3rem; }
+.hero { background:linear-gradient(135deg,#111827,#1e3a5f); padding:2.2rem 2.5rem; border-radius:18px; margin-bottom:1.4rem; }
+.hero h1 { color:white; font-size:2.4rem; margin:0; }
+.hero p { color:#cbd5e1; margin:.4rem 0 0; }
+.card { background:white; border:1px solid #e5e7eb; border-radius:14px; padding:1.1rem 1.25rem; box-shadow:0 4px 15px rgba(15,23,42,.05); }
+.small { color:#64748b; font-size:.82rem; text-transform:uppercase; letter-spacing:.04em; font-weight:650; }
+.big { color:#111827; font-size:1.75rem; font-weight:750; margin-top:.35rem; }
+.explain { background:white; border:1px solid #e2e8f0; border-left:5px solid #2563eb; border-radius:14px; padding:1.3rem 1.5rem; margin:.8rem 0 1.2rem; color:#334155; line-height:1.6; }
 </style>
-""")
+""", unsafe_allow_html=True)
 
-render_sidebar_html('<div style="font-size:1.7rem;font-weight:700;color:#fff !important;">InsureInvest</div><div style="color:#94a3b8 !important;font-size:.85rem;margin-top:5px;">Company Analysis</div>')
+# ------------------------- Cached data helpers -------------------------
+@st.cache_data(ttl=900, show_spinner=False)
+def load_company(ticker, period="2y"):
+    df = get_price_data(ticker, period)
+    return add_technical_indicators(df)
+
+@st.cache_data(ttl=900, show_spinner=False)
+def load_benchmark(period="2y"):
+    return get_price_data(BENCHMARK, period)
+
+@st.cache_data(ttl=900, show_spinner=False)
+def load_peer_returns(companies, period="2y"):
+    output = {}
+    for company, ticker in companies.items():
+        try:
+            df = get_price_data(ticker, period)
+            close = df.set_index("Date")["Close"]
+            output[company] = daily_returns(close)
+        except Exception:
+            continue
+    if not output:
+        return pd.DataFrame()
+    return pd.concat(output, axis=1).dropna(how="all").ffill().dropna()
+
+# ------------------------- Sidebar -------------------------
+st.sidebar.markdown("## InsureInvest")
+st.sidebar.caption("Company Analysis")
 st.sidebar.markdown("---")
+
 company_options = list(INSURANCE_STOCKS.keys())
-_default_company = st.session_state.get("selected_company", company_options[0])
-_default_index = company_options.index(_default_company) if _default_company in company_options else 0
-selected_company = st.sidebar.selectbox("Select a company", company_options, index=_default_index)
+default_company = st.session_state.get("selected_company", company_options[0])
+if default_company not in company_options:
+    default_company = company_options[0]
+selected_company = st.sidebar.selectbox("Select a company", company_options, index=company_options.index(default_company))
 st.session_state["selected_company"] = selected_company
 selected_ticker = INSURANCE_STOCKS[selected_company]
-render_sidebar_html(f'<div style="background:#1f2937;padding:10px;border-radius:8px;margin-top:10px;color:#cbd5e1 !important;font-size:.85rem;">NSE Ticker<br><strong style="color:#fff !important;">{selected_ticker}</strong><br>{COMPANY_CATEGORIES.get(selected_company, "Investment")}</div>')
+category = COMPANY_CATEGORIES.get(selected_company, "Investment")
+
+st.sidebar.markdown(f"**NSE:** `{selected_ticker}`")
+st.sidebar.caption(category)
 st.sidebar.markdown("---")
 if st.sidebar.button("← Back to Investment Planner", use_container_width=True):
     st.switch_page("app.py")
 
-render_html('<div class="hero"><div class="hero-title">Company Analysis</div><div class="hero-subtitle">Detailed historical, technical and risk analysis</div></div>')
+st.markdown(f"""
+<div class="hero">
+<h1>{selected_company}</h1>
+<p>{category} &nbsp;•&nbsp; NSE: {selected_ticker} &nbsp;•&nbsp; Full company analytics</p>
+</div>
+""", unsafe_allow_html=True)
 
-with st.spinner("Loading market data..."):
-    try:
-        stock_df = get_price_data(selected_ticker, "2y")
-        stock_df = add_technical_indicators(stock_df)
-        benchmark_df = get_price_data(BENCHMARK, "2y")
-    except Exception as exc:
-        st.error("Couldn\'t load market data from Yahoo Finance right now. This is usually temporary rate-limiting on their side — wait a minute and retry.")
-        st.caption(f"Details: {exc}")
-        if st.button("Retry"):
-            st.cache_data.clear()
-            st.rerun()
-        st.stop()
+# ------------------------- Load selected company -------------------------
+try:
+    with st.spinner(f"Loading {selected_company} market data..."):
+        stock_df = load_company(selected_ticker, "2y")
+        benchmark_df = load_benchmark("2y")
+except Exception as exc:
+    st.error("Market data could not be loaded right now.")
+    st.info("Yahoo Finance can temporarily rate-limit requests. Wait a few seconds and use the Retry button below.")
+    st.caption(f"Technical details: {exc}")
+    if st.button("Retry"):
+        st.cache_data.clear()
+        st.rerun()
+    st.stop()
 
 stock_close = stock_df.set_index("Date")["Close"]
 benchmark_close = benchmark_df.set_index("Date")["Close"]
 metrics = performance_summary(stock_close, benchmark_close)
-latest_price = stock_close.iloc[-1]
-latest_date = stock_df["Date"].max()
+latest = stock_df.iloc[-1]
+latest_price = float(latest["Close"])
+latest_date = pd.to_datetime(latest["Date"])
 
-render_html(f'<div class="company-name">{selected_company}</div><div class="company-meta">{COMPANY_CATEGORIES.get(selected_company, "Investment")} &nbsp; • &nbsp; NSE: {selected_ticker} &nbsp; • &nbsp; Latest price: ₹{latest_price:,.2f} &nbsp; • &nbsp; Data through {latest_date.strftime("%d %B %Y")}</div>')
+# ------------------------- Snapshot -------------------------
+st.subheader("Performance Snapshot")
+cols = st.columns(5)
+metric_data = [
+    ("Annual Return", f"{metrics['Annual Return']:.2%}", "Historical annualized return"),
+    ("Annual Volatility", f"{metrics['Annual Volatility']:.2%}", "Historical price fluctuation"),
+    ("Sharpe Ratio", f"{metrics['Sharpe Ratio']:.2f}", "Return relative to risk"),
+    ("Maximum Drawdown", f"{metrics['Maximum Drawdown']:.2%}", "Largest peak-to-trough fall"),
+    ("Beta", f"{metrics['Beta']:.2f}", "Sensitivity to NIFTY 50"),
+]
+for c, (label, value, desc) in zip(cols, metric_data):
+    with c:
+        st.markdown(f'<div class="card"><div class="small">{label}</div><div class="big">{value}</div><div style="color:#94a3b8;font-size:.75rem">{desc}</div></div>', unsafe_allow_html=True)
 
-# Performance snapshot
-render_html('<div class="section-title">Performance Snapshot</div>')
-col1,col2,col3,col4,col5=st.columns(5)
-metric_cards=[(col1,"Annual Return",f"{metrics['Annual Return']:.2%}","Historical annualized return"),(col2,"Annual Volatility",f"{metrics['Annual Volatility']:.2%}","Historical price fluctuation"),(col3,"Sharpe Ratio",f"{metrics['Sharpe Ratio']:.2f}","Risk-adjusted return"),(col4,"Maximum Drawdown",f"{metrics['Maximum Drawdown']:.2%}","Worst peak-to-trough fall"),(col5,"Beta",f"{metrics['Beta']:.2f}","Sensitivity to NIFTY 50")]
-for column,label,value,description in metric_cards:
-    with column:
-        render_html(f'<div class="metric-card"><div class="metric-label">{label}</div><div class="metric-value">{value}</div><div class="metric-description">{description}</div></div>')
+st.markdown(f'<div class="explain"><b>Quick read:</b> {selected_company} is currently trading at <b>₹{latest_price:,.2f}</b>. Its historical annual return is <b>{metrics["Annual Return"]:.2%}</b>, with <b>{metrics["Annual Volatility"]:.2%}</b> volatility and a Sharpe ratio of <b>{metrics["Sharpe Ratio"]:.2f}</b>. These figures describe historical behaviour; they do not guarantee future performance.</div>', unsafe_allow_html=True)
 
-# Price chart
-st.markdown('<div class="section-title">Historical Price & Technical Indicators</div>',unsafe_allow_html=True)
-st.caption("Daily price movement with 50-day and 200-day moving averages and Bollinger Bands.")
-fig=go.Figure()
-fig.add_trace(go.Candlestick(x=stock_df["Date"],open=stock_df["Open"],high=stock_df["High"],low=stock_df["Low"],close=stock_df["Close"],name=selected_company))
-fig.add_trace(go.Scatter(x=stock_df["Date"],y=stock_df["SMA_50"],mode="lines",name="50-Day SMA",line=dict(width=2)))
-fig.add_trace(go.Scatter(x=stock_df["Date"],y=stock_df["SMA_200"],mode="lines",name="200-Day SMA",line=dict(width=2)))
-fig.add_trace(go.Scatter(x=stock_df["Date"],y=stock_df["BB_Upper"],mode="lines",name="Bollinger Upper",line=dict(width=1,dash="dash")))
-fig.add_trace(go.Scatter(x=stock_df["Date"],y=stock_df["BB_Lower"],mode="lines",name="Bollinger Lower",line=dict(width=1,dash="dash")))
-fig.update_layout(**DARK_CHART,height=560,margin=dict(l=20,r=20,t=20,b=20),xaxis=dict(title="Date",rangeslider=dict(visible=False),showgrid=False),yaxis=dict(title="Price (₹)",showgrid=True,gridcolor=DARK_GRID),hovermode="x unified",legend=LEGEND_TOP)
-st.plotly_chart(fig,use_container_width=True,theme=None)
+# ------------------------- Tabs -------------------------
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    "Price & Technicals", "Risk & Return", "Peer Comparison", "Efficient Frontier", "Monte Carlo", "Black-Scholes"
+])
 
-# RSI
-st.markdown('<div class="section-title">Momentum Indicator — RSI</div>',unsafe_allow_html=True)
-st.caption("14-day Relative Strength Index. Values above 70 may indicate overbought conditions, while values below 30 may indicate oversold conditions.")
-rsi_fig=go.Figure(); rsi_fig.add_trace(go.Scatter(x=stock_df["Date"],y=stock_df["RSI_14"],mode="lines",name="RSI (14)",line=dict(width=2))); rsi_fig.add_hline(y=70,line_dash="dash",annotation_text="Overbought (70)"); rsi_fig.add_hline(y=30,line_dash="dash",annotation_text="Oversold (30)"); rsi_fig.add_hline(y=50,line_dash="dot",annotation_text="50")
-rsi_fig.update_layout(**DARK_CHART,height=320,margin=dict(l=20,r=20,t=20,b=20),xaxis=dict(title="Date",showgrid=False),yaxis=dict(title="RSI",range=[0,100],showgrid=True,gridcolor=DARK_GRID),hovermode="x unified")
-st.plotly_chart(rsi_fig,use_container_width=True,theme=None)
+with tab1:
+    st.subheader("Historical Price & Technical Indicators")
+    fig = go.Figure()
+    fig.add_trace(go.Candlestick(x=stock_df["Date"], open=stock_df["Open"], high=stock_df["High"], low=stock_df["Low"], close=stock_df["Close"], name=selected_company))
+    for col, name, dash in [("SMA_50", "50-Day SMA", "solid"), ("SMA_200", "200-Day SMA", "solid"), ("BB_Upper", "Bollinger Upper", "dash"), ("BB_Lower", "Bollinger Lower", "dash")]:
+        fig.add_trace(go.Scatter(x=stock_df["Date"], y=stock_df[col], mode="lines", name=name, line=dict(width=1.7, dash=dash)))
+    fig.update_layout(template="plotly_dark", height=560, margin=dict(l=15,r=15,t=25,b=15), xaxis_rangeslider_visible=False, hovermode="x unified")
+    st.plotly_chart(fig, use_container_width=True, theme=None)
 
-# MACD
-st.markdown('<div class="section-title">Trend & Momentum Indicator — MACD</div>',unsafe_allow_html=True)
-st.caption("Moving Average Convergence Divergence using 12-day, 26-day and 9-day exponential moving averages.")
-macd_fig=go.Figure(); macd_fig.add_trace(go.Scatter(x=stock_df["Date"],y=stock_df["MACD"],mode="lines",name="MACD",line=dict(width=2))); macd_fig.add_trace(go.Scatter(x=stock_df["Date"],y=stock_df["MACD_Signal"],mode="lines",name="Signal Line",line=dict(width=2))); macd_fig.add_trace(go.Bar(x=stock_df["Date"],y=stock_df["MACD_Histogram"],name="Histogram",opacity=.6)); macd_fig.add_hline(y=0,line_dash="dash")
-macd_fig.update_layout(**DARK_CHART,height=360,margin=dict(l=20,r=20,t=20,b=20),xaxis=dict(title="Date",showgrid=False),yaxis=dict(title="MACD",showgrid=True,gridcolor=DARK_GRID),hovermode="x unified",legend=LEGEND_TOP)
-st.plotly_chart(macd_fig,use_container_width=True,theme=None)
+    rsi_fig = go.Figure(go.Scatter(x=stock_df["Date"], y=stock_df["RSI_14"], mode="lines", name="RSI-14"))
+    rsi_fig.add_hline(y=70, line_dash="dash", annotation_text="70 — overbought")
+    rsi_fig.add_hline(y=30, line_dash="dash", annotation_text="30 — oversold")
+    rsi_fig.update_layout(template="plotly_dark", height=300, yaxis=dict(range=[0,100]), hovermode="x unified")
+    st.plotly_chart(rsi_fig, use_container_width=True, theme=None)
 
-# Technical summary
-render_html('<div class="section-title">Technical Signal Summary</div><div style="color:#64748b;font-size:.9rem;margin-bottom:1rem;">Latest technical signals for the selected company.</div>')
-latest_close=stock_df["Close"].iloc[-1]; latest_sma_50=stock_df["SMA_50"].iloc[-1]; latest_sma_200=stock_df["SMA_200"].iloc[-1]; latest_rsi=stock_df["RSI_14"].iloc[-1]; latest_macd=stock_df["MACD"].iloc[-1]; latest_macd_signal=stock_df["MACD_Signal"].iloc[-1]; latest_bb_upper=stock_df["BB_Upper"].iloc[-1]; latest_bb_lower=stock_df["BB_Lower"].iloc[-1]
-if latest_close>latest_sma_50 and latest_close>latest_sma_200: trend_signal="Positive"; trend_text="The current price is above both the 50-day and 200-day moving averages, indicating a positive trend relative to these indicators."
-elif latest_close<latest_sma_50 and latest_close<latest_sma_200: trend_signal="Weak"; trend_text="The current price is below both the 50-day and 200-day moving averages, indicating a relatively weak price trend."
-else: trend_signal="Mixed"; trend_text="The current price is between the 50-day and 200-day moving averages, indicating mixed trend signals."
-if latest_rsi>=70: rsi_signal="Overbought"; rsi_text=f"RSI is {latest_rsi:.1f}, above 70. This may indicate strong upward momentum or an overbought condition."
-elif latest_rsi<=30: rsi_signal="Oversold"; rsi_text=f"RSI is {latest_rsi:.1f}, below 30. This may indicate strong downward momentum or an oversold condition."
-else: rsi_signal="Neutral"; rsi_text=f"RSI is {latest_rsi:.1f}, within the 30–70 neutral range."
-if latest_macd>latest_macd_signal: macd_signal="Positive"; macd_text="The MACD line is above the signal line, indicating positive momentum."
-elif latest_macd<latest_macd_signal: macd_signal="Negative"; macd_text="The MACD line is below the signal line, indicating negative momentum."
-else: macd_signal="Neutral"; macd_text="The MACD line is approximately equal to the signal line."
-if latest_close>latest_bb_upper: bollinger_signal="Above Upper Band"; bollinger_text="The current price is above the upper Bollinger Band, indicating unusually strong recent price movement."
-elif latest_close<latest_bb_lower: bollinger_signal="Below Lower Band"; bollinger_text="The current price is below the lower Bollinger Band, indicating unusually weak recent price movement."
-else: bollinger_signal="Within Bands"; bollinger_text="The current price is currently within the Bollinger Bands."
-render_html(f'<div class="interpretation-card"><div class="interpretation-overall">Trend: {trend_signal}</div><div class="interpretation-overall-text">{trend_text}</div><div class="interpretation-grid"><div class="interpretation-item"><div class="interpretation-label">Current Price</div><div class="interpretation-text">₹{latest_close:,.2f}</div></div><div class="interpretation-item"><div class="interpretation-label">Moving Averages</div><div class="interpretation-text">50-Day SMA: ₹{latest_sma_50:,.2f}<br>200-Day SMA: ₹{latest_sma_200:,.2f}</div></div><div class="interpretation-item"><div class="interpretation-label">RSI — {rsi_signal}</div><div class="interpretation-text">{rsi_text}</div></div><div class="interpretation-item"><div class="interpretation-label">MACD — {macd_signal}</div><div class="interpretation-text">{macd_text}<br><br>MACD: {latest_macd:.2f}<br>Signal: {latest_macd_signal:.2f}</div></div><div class="interpretation-item"><div class="interpretation-label">Bollinger Bands — {bollinger_signal}</div><div class="interpretation-text">{bollinger_text}<br><br>Upper Band: ₹{latest_bb_upper:,.2f}<br>Lower Band: ₹{latest_bb_lower:,.2f}</div></div><div class="interpretation-item"><div class="interpretation-label">Technical Overview</div><div class="interpretation-text">Trend: {trend_signal}<br>Momentum: {rsi_signal}<br>MACD: {macd_signal}<br>Volatility Position: {bollinger_signal}</div></div></div><div class="interpretation-note">These are technical indicators generated from historical market data, not buy/sell guarantees.</div></div>')
+    macd_fig = go.Figure()
+    macd_fig.add_trace(go.Scatter(x=stock_df["Date"], y=stock_df["MACD"], mode="lines", name="MACD"))
+    macd_fig.add_trace(go.Scatter(x=stock_df["Date"], y=stock_df["MACD_Signal"], mode="lines", name="Signal"))
+    macd_fig.add_trace(go.Bar(x=stock_df["Date"], y=stock_df["MACD_Histogram"], name="Histogram", opacity=.5))
+    macd_fig.update_layout(template="plotly_dark", height=330, hovermode="x unified")
+    st.plotly_chart(macd_fig, use_container_width=True, theme=None)
 
-# Benchmark
-render_html('<div class="section-title">Benchmark Comparison</div><div style="color:#64748b;font-size:.9rem;margin-bottom:1rem;">Selected company versus the NIFTY 50 over the same historical period.</div>')
-comparison_df=pd.concat([stock_close.rename(selected_company),benchmark_close.rename("NIFTY 50")],axis=1).dropna(); normalized_comparison=comparison_df/comparison_df.iloc[0]*100
-stock_total_return=(comparison_df[selected_company].iloc[-1]/comparison_df[selected_company].iloc[0])-1; benchmark_total_return=(comparison_df["NIFTY 50"].iloc[-1]/comparison_df["NIFTY 50"].iloc[0])-1; trading_days=len(comparison_df); stock_annualized_return=(1+stock_total_return)**(252/trading_days)-1; benchmark_annualized_return=(1+benchmark_total_return)**(252/trading_days)-1
-daily_returns_comparison=comparison_df.pct_change().dropna(); stock_volatility=daily_returns_comparison[selected_company].std()*np.sqrt(252); benchmark_volatility=daily_returns_comparison["NIFTY 50"].std()*np.sqrt(252); relative_total_return=stock_total_return-benchmark_total_return; relative_annualized_return=stock_annualized_return-benchmark_annualized_return
-if relative_annualized_return>.05: benchmark_assessment="Strong Outperformance"; benchmark_text=f"{selected_company} generated an annualized return {relative_annualized_return:.2%} higher than the NIFTY 50."
-elif relative_annualized_return>0: benchmark_assessment="Outperformed"; benchmark_text=f"{selected_company} generated a higher annualized return than the NIFTY 50 by {relative_annualized_return:.2%}."
-elif relative_annualized_return>-.05: benchmark_assessment="Slight Underperformance"; benchmark_text=f"{selected_company} generated a lower annualized return than the NIFTY 50 by {abs(relative_annualized_return):.2%}."
-else: benchmark_assessment="Underperformed"; benchmark_text=f"{selected_company} generated an annualized return {abs(relative_annualized_return):.2%} below the NIFTY 50."
-benchmark_fig=go.Figure(); benchmark_fig.add_trace(go.Scatter(x=normalized_comparison.index,y=normalized_comparison[selected_company],mode="lines",name=selected_company,line=dict(width=3))); benchmark_fig.add_trace(go.Scatter(x=normalized_comparison.index,y=normalized_comparison["NIFTY 50"],mode="lines",name="NIFTY 50",line=dict(width=3))); benchmark_fig.add_hline(y=100,line_dash="dot",annotation_text="Starting value: ₹100")
-benchmark_fig.update_layout(**DARK_CHART,height=480,margin=dict(l=20,r=20,t=20,b=20),xaxis=dict(title="Date",showgrid=False),yaxis=dict(title="Growth of ₹100",showgrid=True,gridcolor=DARK_GRID),hovermode="x unified",legend=LEGEND_TOP); st.plotly_chart(benchmark_fig,use_container_width=True,theme=None)
-render_html(f'<div class="interpretation-card"><div class="interpretation-overall">Benchmark Assessment: {benchmark_assessment}</div><div class="interpretation-overall-text">{benchmark_text}</div><div class="interpretation-grid"><div class="interpretation-item"><div class="interpretation-label">{selected_company} Annualized Return</div><div class="interpretation-text">{stock_annualized_return:.2%}</div></div><div class="interpretation-item"><div class="interpretation-label">NIFTY 50 Annualized Return</div><div class="interpretation-text">{benchmark_annualized_return:.2%}</div></div><div class="interpretation-item"><div class="interpretation-label">{selected_company} Volatility</div><div class="interpretation-text">{stock_volatility:.2%}</div></div><div class="interpretation-item"><div class="interpretation-label">NIFTY 50 Volatility</div><div class="interpretation-text">{benchmark_volatility:.2%}</div></div></div><div class="interpretation-note">Benchmark comparison is historical and does not predict future returns.</div></div>')
+    st.subheader("Technical Signal Summary")
+    close = float(latest["Close"]); sma50 = float(latest["SMA_50"]); sma200 = float(latest["SMA_200"]); rsi = float(latest["RSI_14"]); macd = float(latest["MACD"]); signal = float(latest["MACD_Signal"]); upper = float(latest["BB_Upper"]); lower = float(latest["BB_Lower"])
+    trend = "Positive" if close > sma50 and close > sma200 else "Weak" if close < sma50 and close < sma200 else "Mixed"
+    rsi_state = "Overbought" if rsi >= 70 else "Oversold" if rsi <= 30 else "Neutral"
+    macd_state = "Positive" if macd > signal else "Negative" if macd < signal else "Neutral"
+    bb_state = "Above upper band" if close > upper else "Below lower band" if close < lower else "Within bands"
+    st.dataframe(pd.DataFrame({"Indicator":["Trend","RSI","MACD","Bollinger Bands"],"Latest value":[trend,f"{rsi:.1f}",f"{macd:.2f}",bb_state],"Simple interpretation":["Price vs 50/200-day averages",f"Momentum condition: {rsi_state}",f"MACD vs signal line: {macd_state}","Current price position vs volatility bands"]}), use_container_width=True, hide_index=True)
 
-# Peer comparison
-render_html('<div class="section-title">Insurance Peer Comparison</div><div style="color:#64748b;font-size:.9rem;margin-bottom:1rem;">Historical risk and return comparison across the available investment universe.</div>')
-@st.cache_data(ttl=3600)
-def load_peer_data():
-    peer_results=[]
-    for company_name,ticker in INSURANCE_STOCKS.items():
-        try:
-            peer_df=get_price_data(ticker,"2y"); peer_close=peer_df.set_index("Date")["Close"].dropna(); peer_metrics=performance_summary(peer_close,benchmark_close)
-            peer_results.append({"Company":company_name,"Ticker":ticker,"Category":COMPANY_CATEGORIES.get(company_name,"Investment"),"Annual Return":peer_metrics["Annual Return"],"Annual Volatility":peer_metrics["Annual Volatility"],"Sharpe Ratio":peer_metrics["Sharpe Ratio"],"Maximum Drawdown":peer_metrics["Maximum Drawdown"],"Beta":peer_metrics["Beta"]})
-        except Exception: continue
-    return pd.DataFrame(peer_results)
-with st.spinner("Comparing companies..."): peer_df=load_peer_data()
-if peer_df.empty: st.warning("Peer comparison data could not be loaded right now. Please refresh.")
-else:
-    numeric_columns=["Annual Return","Annual Volatility","Sharpe Ratio","Maximum Drawdown","Beta"]
-    for column in numeric_columns: peer_df[column]=pd.to_numeric(peer_df[column],errors="coerce")
-    peer_df=peer_df.dropna(subset=["Annual Return","Annual Volatility","Sharpe Ratio","Maximum Drawdown"])
-    peer_df["Peer Score"]=peer_df["Annual Return"].rank(pct=True)*100*.30+peer_df["Sharpe Ratio"].rank(pct=True)*100*.30+peer_df["Annual Volatility"].rank(pct=True,ascending=False)*100*.20+peer_df["Maximum Drawdown"].rank(pct=True)*100*.20
-    peer_df["Rank"]=peer_df["Peer Score"].rank(ascending=False,method="min").astype(int); peer_df=peer_df.sort_values("Peer Score",ascending=False).reset_index(drop=True)
-    peer_chart_df=peer_df.sort_values("Peer Score",ascending=True); other_peers=peer_chart_df[peer_chart_df["Company"]!=selected_company]; selected_peer=peer_chart_df[peer_chart_df["Company"]==selected_company]
-    peer_fig=go.Figure(); peer_fig.add_trace(go.Bar(x=other_peers["Peer Score"],y=other_peers["Company"],orientation="h",name="Other Companies",marker=dict(color="#CBD5E1"),text=[f"{v:.1f}" for v in other_peers["Peer Score"]],textposition="outside"))
-    if not selected_peer.empty: peer_fig.add_trace(go.Bar(x=selected_peer["Peer Score"],y=selected_peer["Company"],orientation="h",name=f"Selected: {selected_company}",marker=dict(color="#3B82F6"),text=[f"{v:.1f}" for v in selected_peer["Peer Score"]],textposition="outside"))
-    peer_fig.update_layout(**DARK_CHART,height=max(420,30*len(peer_df)),margin=dict(l=20,r=80,t=40,b=20),xaxis=dict(title="Peer Score",range=[0,max(100,peer_df["Peer Score"].max()+10)]),yaxis=dict(title="",categoryorder="array",categoryarray=peer_chart_df["Company"].tolist()),legend=LEGEND_TOP_RIGHT,bargap=.25); st.plotly_chart(peer_fig,use_container_width=True,theme=None)
-    display_peer_df=peer_df[["Rank","Company","Category","Annual Return","Annual Volatility","Sharpe Ratio","Maximum Drawdown","Beta","Peer Score"]].copy(); display_peer_df.columns=["Rank","Company","Category","Annual Return","Volatility","Sharpe Ratio","Maximum Drawdown","Beta","Peer Score"]
-    st.dataframe(display_peer_df.style.format({"Annual Return":"{:.2%}","Volatility":"{:.2%}","Sharpe Ratio":"{:.2f}","Maximum Drawdown":"{:.2%}","Beta":"{:.2f}","Peer Score":"{:.1f}"}),use_container_width=True,hide_index=True)
+with tab2:
+    st.subheader("Risk, Return & Benchmark")
+    benchmark_metrics = performance_summary(benchmark_close, benchmark_close)
+    risk_table = pd.DataFrame({
+        "Metric":["Annual Return","Annual Volatility","Sharpe Ratio","Maximum Drawdown","Beta"],
+        selected_company:[metrics["Annual Return"],metrics["Annual Volatility"],metrics["Sharpe Ratio"],metrics["Maximum Drawdown"],metrics["Beta"]],
+        "NIFTY 50 Benchmark":[benchmark_metrics["Annual Return"],benchmark_metrics["Annual Volatility"],benchmark_metrics["Sharpe Ratio"],benchmark_metrics["Maximum Drawdown"],1.0],
+    })
+    st.dataframe(risk_table.style.format({selected_company:"{:.2%}","NIFTY 50 Benchmark":"{:.2%}"}, subset=["Annual Return","Annual Volatility","Maximum Drawdown"]), use_container_width=True, hide_index=True)
 
-# Scenario simulation
-render_html('<div class="section-title">1-Year Scenario Simulation</div><div style="color:#64748b;font-size:.9rem;margin-bottom:1rem;">Probabilistic price scenarios based on the selected company’s historical return and volatility.</div>')
-NUM_SIMULATIONS=10000; TRADING_DAYS=252; DISPLAY_PATHS=100; historical_returns=stock_df["Close"].pct_change().dropna(); daily_mean_return=historical_returns.mean(); daily_volatility=historical_returns.std(); current_price=stock_df["Close"].iloc[-1]; np.random.seed(42); random_returns=np.random.normal(loc=daily_mean_return,scale=daily_volatility,size=(TRADING_DAYS,NUM_SIMULATIONS)); price_paths=np.zeros((TRADING_DAYS+1,NUM_SIMULATIONS)); price_paths[0]=current_price
-for day in range(1,TRADING_DAYS+1): price_paths[day]=price_paths[day-1]*(1+random_returns[day-1])
-final_prices=price_paths[-1]; median_price=np.percentile(final_prices,50); lower_price=np.percentile(final_prices,5); upper_price=np.percentile(final_prices,95); probability_above_current=np.mean(final_prices>current_price); simulated_median_return=(median_price/current_price)-1
-simulation_fig=go.Figure(); days=np.arange(TRADING_DAYS+1)
-for i in range(DISPLAY_PATHS): simulation_fig.add_trace(go.Scatter(x=days,y=price_paths[:,i],mode="lines",line=dict(width=1),opacity=.12,showlegend=False,hoverinfo="skip"))
-simulation_fig.add_trace(go.Scatter(x=days,y=np.percentile(price_paths,50,axis=1),mode="lines",name="Median Path",line=dict(width=3))); simulation_fig.add_trace(go.Scatter(x=days,y=np.percentile(price_paths,5,axis=1),mode="lines",name="5th Percentile",line=dict(width=2,dash="dash"))); simulation_fig.add_trace(go.Scatter(x=days,y=np.percentile(price_paths,95,axis=1),mode="lines",name="95th Percentile",line=dict(width=2,dash="dash"))); simulation_fig.add_hline(y=current_price,line_dash="dot",annotation_text=f"Current Price: ₹{current_price:,.2f}")
-simulation_fig.update_layout(**DARK_CHART,height=520,margin=dict(l=20,r=20,t=20,b=20),xaxis=dict(title="Trading Days Ahead"),yaxis=dict(title="Simulated Price (₹)",showgrid=True,gridcolor=DARK_GRID),hovermode="x unified",legend=LEGEND_TOP_RIGHT); st.plotly_chart(simulation_fig,use_container_width=True,theme=None)
-mc1,mc2,mc3,mc4=st.columns(4)
-for c,label,value,desc in [(mc1,"Current Price",f"₹{current_price:,.2f}","Latest market price"),(mc2,"Median Price",f"₹{median_price:,.2f}","50th percentile after 1 year"),(mc3,"5th–95th Range",f"₹{lower_price:,.0f} – ₹{upper_price:,.0f}","Simulated price range"),(mc4,"Probability Above Current",f"{probability_above_current:.1%}","Simulated paths ending higher")]:
-    with c: render_html(f'<div class="metric-card"><div class="metric-label">{label}</div><div class="metric-value">{value}</div><div class="metric-description">{desc}</div></div>')
-render_html(f'<div class="interpretation-card"><div class="interpretation-overall">Scenario result</div><div class="interpretation-overall-text">The median simulated price is ₹{median_price:,.2f}, representing a simulated return of {simulated_median_return:.2%}. This is a probability-based scenario, not a forecast or guarantee.</div></div>')
+    fig = go.Figure()
+    stock_norm = stock_close / stock_close.iloc[0] * 100
+    bench_norm = benchmark_close / benchmark_close.iloc[0] * 100
+    fig.add_trace(go.Scatter(x=stock_norm.index, y=stock_norm, mode="lines", name=selected_company))
+    fig.add_trace(go.Scatter(x=bench_norm.index, y=bench_norm, mode="lines", name="NIFTY 50"))
+    fig.update_layout(template="plotly_dark", height=420, title="Growth of ₹100 (indexed to 100)", hovermode="x unified")
+    st.plotly_chart(fig, use_container_width=True, theme=None)
 
-# Risk-return interpretation
-render_html('<div class="section-title">Dynamic Risk & Return Interpretation</div>')
-annual_return_value=metrics["Annual Return"]; volatility_value=metrics["Annual Volatility"]; sharpe_value=metrics["Sharpe Ratio"]; drawdown_value=metrics["Maximum Drawdown"]; beta_value=metrics["Beta"]
-return_text=f"Historical annualized return: {annual_return_value:.2%}."; volatility_text=f"Historical annual volatility: {volatility_value:.2%}."; sharpe_text=f"Sharpe Ratio: {sharpe_value:.2f}, indicating the historical return relative to risk taken."; drawdown_text=f"Maximum historical drawdown: {drawdown_value:.2%}."; beta_text=f"Beta: {beta_value:.2f}, measuring sensitivity to NIFTY 50 movements."
-render_html(f'<div class="interpretation-card"><div class="interpretation-overall">Quick read</div><div class="interpretation-overall-text">This company should be interpreted using return, volatility, risk-adjusted performance and downside risk together rather than any single metric.</div><div class="interpretation-grid"><div class="interpretation-item"><div class="interpretation-label">Return</div><div class="interpretation-text">{return_text}</div></div><div class="interpretation-item"><div class="interpretation-label">Risk</div><div class="interpretation-text">{volatility_text}</div></div><div class="interpretation-item"><div class="interpretation-label">Risk-adjusted Performance</div><div class="interpretation-text">{sharpe_text}</div></div><div class="interpretation-item"><div class="interpretation-label">Downside Risk</div><div class="interpretation-text">{drawdown_text}</div></div><div class="interpretation-item"><div class="interpretation-label">Market Sensitivity</div><div class="interpretation-text">{beta_text}</div></div></div></div>')
+    st.markdown(f'<div class="explain"><b>How to read Sharpe:</b> a higher Sharpe ratio generally means more historical return was achieved per unit of volatility. <b>Beta</b> above 1 means the stock historically moved more than the NIFTY 50; below 1 means less sensitivity. <b>Maximum drawdown</b> shows the worst historical peak-to-trough decline.</div>', unsafe_allow_html=True)
 
-render_html('<div class="section-title">Historical Market Data</div>')
-st.caption("Most recent 20 trading days for the selected company.")
-st.dataframe(stock_df.tail(20),use_container_width=True,hide_index=True)
-render_html('<div class="footer">InsureInvest • Historical market analytics prototype<br>Data sourced through Yahoo Finance via yfinance.</div>')
+with tab3:
+    st.subheader("Listed Insurance Peer Comparison")
+    pure_insurance = {k:v for k,v in INSURANCE_STOCKS.items() if COMPANY_CATEGORIES.get(k) == "Pure Insurance"}
+    peer_rows=[]
+    with st.spinner("Loading listed insurance peers..."):
+        for company,ticker in pure_insurance.items():
+            try:
+                df=load_company(ticker,"2y")
+                close_s=df.set_index("Date")["Close"]
+                m=performance_summary(close_s,benchmark_close)
+                peer_rows.append({"Company":company,"Annual Return":m["Annual Return"],"Volatility":m["Annual Volatility"],"Sharpe":m["Sharpe Ratio"],"Max Drawdown":m["Maximum Drawdown"],"Beta":m["Beta"]})
+            except Exception:
+                pass
+    if peer_rows:
+        peers=pd.DataFrame(peer_rows).sort_values("Sharpe",ascending=False)
+        st.dataframe(peers.style.format({"Annual Return":"{:.2%}","Volatility":"{:.2%}","Sharpe":"{:.2f}","Max Drawdown":"{:.2%}","Beta":"{:.2f}"}),use_container_width=True,hide_index=True)
+        st.bar_chart(peers.set_index("Company")["Sharpe"])
+    else:
+        st.warning("No peer data is currently available.")
+
+with tab4:
+    st.subheader("Efficient Frontier")
+    st.caption("The frontier is estimated from historical returns and covariance across listed pure-insurance peers. The selected company is highlighted against the simulated portfolio opportunity set.")
+    pure_insurance = {k:v for k,v in INSURANCE_STOCKS.items() if COMPANY_CATEGORIES.get(k) == "Pure Insurance"}
+    returns_df = load_peer_returns(tuple(pure_insurance.items()), "2y")
+    if returns_df.shape[1] >= 3:
+        ann_mu = returns_df.mean() * 252
+        cov = returns_df.cov() * 252
+        names=list(returns_df.columns)
+        n=len(names)
+        def port_stats(w):
+            ret=float(np.dot(w,ann_mu.values)); vol=float(np.sqrt(np.dot(w,np.dot(cov.values,w))))
+            return ret,vol
+        def objective(w):
+            ret,vol=port_stats(w); return -((ret-0.06)/vol) if vol>0 else 999
+        cons=({"type":"eq","fun":lambda w:np.sum(w)-1},)
+        bounds=tuple((0,0.5) for _ in range(n))
+        x0=np.ones(n)/n
+        opt=minimize(objective,x0,bounds=bounds,constraints=cons,method="SLSQP")
+        rng=np.random.default_rng(42)
+        W=rng.dirichlet(np.ones(n),size=5000)
+        rets=W@ann_mu.values
+        vols=np.sqrt(np.einsum("ij,jk,ik->i",W,cov.values,W))
+        fig=go.Figure(go.Scatter(x=vols,y=rets,mode="markers",marker=dict(size=4,opacity=.35),name="Simulated portfolios"))
+        if opt.success:
+            oret,ovol=port_stats(opt.x); fig.add_trace(go.Scatter(x=[ovol],y=[oret],mode="markers",marker=dict(size=14,symbol="star"),name="Maximum Sharpe portfolio"))
+        if selected_company in names:
+            idx=names.index(selected_company); fig.add_trace(go.Scatter(x=[math.sqrt(cov.iloc[idx,idx])],y=[ann_mu.iloc[idx]],mode="markers+text",text=[selected_company],textposition="top center",marker=dict(size=14),name="Selected company"))
+        fig.update_layout(template="plotly_dark",height=500,xaxis_title="Annualized Volatility",yaxis_title="Annualized Return",hovermode="closest")
+        st.plotly_chart(fig,use_container_width=True,theme=None)
+        if opt.success:
+            st.info(f"Historical maximum-Sharpe portfolio estimate: {oret:.2%} annualized return, {ovol:.2%} annualized volatility.")
+    else:
+        st.warning("Not enough peer price histories are available to construct the frontier.")
+
+with tab5:
+    st.subheader("1-Year Monte Carlo Scenario Simulation")
+    st.caption("This is a stochastic historical-parameter simulation, not a forecast or guaranteed return.")
+    simulations=st.slider("Number of simulations",1000,10000,5000,1000)
+    horizon=252
+    hist_returns=daily_returns(stock_close).dropna()
+    mu=float(hist_returns.mean()); sigma=float(hist_returns.std())
+    seed=42
+    rng=np.random.default_rng(seed)
+    shocks=rng.normal(mu,sigma,size=(horizon,simulations))
+    paths=latest_price*np.exp(np.cumsum(shocks,axis=0))
+    final_values=paths[-1]
+    q=np.percentile(final_values,[5,25,50,75,95])
+    fig=go.Figure()
+    for idx in rng.choice(simulations,size=min(60,simulations),replace=False):
+        fig.add_trace(go.Scatter(y=paths[:,idx],mode="lines",line=dict(width=1),showlegend=False,opacity=.15))
+    fig.add_hline(y=latest_price,line_dash="dash",annotation_text="Current price")
+    fig.update_layout(template="plotly_dark",height=500,xaxis_title="Trading Days",yaxis_title="Simulated Price (₹)")
+    st.plotly_chart(fig,use_container_width=True,theme=None)
+    st.dataframe(pd.DataFrame({"Scenario":["5th percentile","25th percentile","Median","75th percentile","95th percentile"],"Simulated price (₹)":q}),use_container_width=True,hide_index=True)
+    st.markdown(f'<div class="explain"><b>Interpretation:</b> using the historical mean daily return and volatility, the median simulated end-point is <b>₹{q[2]:,.2f}</b>. The wide range demonstrates uncertainty rather than predicting a single future price.</div>',unsafe_allow_html=True)
+
+with tab6:
+    st.subheader("Black-Scholes Option Valuation")
+    st.caption("The model estimates a theoretical European option value from the selected company's current price, volatility, time to expiry and risk-free rate. It is a pricing model, not an investment recommendation.")
+    c1,c2,c3,c4=st.columns(4)
+    with c1: strike=st.number_input("Strike price (₹)",min_value=1.0,value=float(round(latest_price,0)),step=1.0)
+    with c2: expiry=st.number_input("Time to expiry (years)",min_value=.01,value=1.0,step=.25)
+    with c3: rf=st.number_input("Risk-free rate",min_value=0.0,max_value=1.0,value=.06,step=.01,format="%.2f")
+    with c4: dividend=st.number_input("Dividend yield",min_value=0.0,max_value=1.0,value=0.0,step=.01,format="%.2f")
+    vol=float(metrics["Annual Volatility"])
+    S=latest_price; K=float(strike); T=float(expiry)
+    if vol>0 and S>0 and K>0:
+        d1=(math.log(S/K)+(rf-dividend+0.5*vol**2)*T)/(vol*math.sqrt(T)); d2=d1-vol*math.sqrt(T)
+        call=S*math.exp(-dividend*T)*norm.cdf(d1)-K*math.exp(-rf*T)*norm.cdf(d2)
+        put=K*math.exp(-rf*T)*norm.cdf(-d2)-S*math.exp(-dividend*T)*norm.cdf(-d1)
+        o1,o2,o3=st.columns(3)
+        o1.metric("Call value",f"₹{call:,.2f}")
+        o2.metric("Put value",f"₹{put:,.2f}")
+        o3.metric("Volatility used",f"{vol:.2%}")
+        st.dataframe(pd.DataFrame({"Input":["Current price","Strike","Volatility","Risk-free rate","Dividend yield","Time to expiry","d1","d2"],"Value":[f"₹{S:,.2f}",f"₹{K:,.2f}",f"{vol:.2%}",f"{rf:.2%}",f"{dividend:.2%}",f"{T:.2f} years",f"{d1:.4f}",f"{d2:.4f}"]}),use_container_width=True,hide_index=True)
+    else:
+        st.warning("Black-Scholes requires positive price, strike, time and volatility.")
+
+st.markdown("---")
+st.caption(f"InsureInvest • {selected_company} • Data through {latest_date.strftime('%d %B %Y')} • Historical analytics prototype; not financial advice.")
