@@ -25,8 +25,9 @@ st.sidebar.markdown("## InsureInvest")
 st.sidebar.caption("Insurance Investment Analytics")
 st.sidebar.markdown("---")
 st.sidebar.markdown("### Navigation")
-if st.sidebar.button("📈  Company Analysis", use_container_width=True):
-    st.switch_page("pages/1_Company_Analysis.py")
+# Direct page links are used instead of switch_page so navigation works reliably
+# with the deployed Streamlit multipage app.
+st.sidebar.page_link("pages/1_Company_Analysis.py", label="Company Analysis", icon="📈")
 st.sidebar.markdown("---")
 st.sidebar.info("Use this Home page to build a portfolio. Use Company Analysis to inspect an individual company in detail.")
 
@@ -92,14 +93,12 @@ if isinstance(results, pd.DataFrame) and not results.empty:
         st.markdown(f'<div class="card" style="margin-bottom:.7rem;"><div class="small-label">{COMPANY_CATEGORIES.get(company, "Investment")}</div><h4 style="margin:.35rem 0;color:#111827;">{company}</h4><div class="muted">{recommendation_text(row)}</div></div>', unsafe_allow_html=True)
 
     st.markdown('<div class="title">Explore a company</div>', unsafe_allow_html=True)
-    st.caption("Choose a recommended company to open its detailed technical and risk analysis.")
+    st.caption("Choose a recommended company to open its detailed technical and risk analysis. You can select any other company once you are there.")
     for company in portfolio.index:
         category = COMPANY_CATEGORIES.get(company, "Investment")
         score = float(portfolio.loc[company, "Investment Score"])
         amount = float(portfolio.loc[company, "Recommended Amount"])
-        if st.button(f"{company} • {category} • ₹{amount:,.0f} • Score {score:.1f}/100", key=f"company_{company}", use_container_width=True):
-            st.session_state["selected_company"] = company
-            st.switch_page("pages/1_Company_Analysis.py")
+        st.page_link("pages/1_Company_Analysis.py", label=f"{company} • {category} • ₹{amount:,.0f} • Score {score:.1f}/100", icon="📈")
 
     with st.expander("How InsureInvest decides"):
         st.markdown("""
