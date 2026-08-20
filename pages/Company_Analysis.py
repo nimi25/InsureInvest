@@ -87,7 +87,7 @@ items = [
 for col, (label, value, desc) in zip(cols, items):
     with col:
         st.markdown(f'<div class="card"><div class="small">{label}</div><div class="big">{value}</div><div style="color:#94a3b8;font-size:.75rem">{desc}</div></div>', unsafe_allow_html=True)
-explanation(f"<b>Quick read:</b> {selected} is at <b>₹{price:,.2f}</b>. Historical annual return is <b>{metrics['Annual Return']:.2%}</b>, volatility is <b>{metrics['Annual Volatility']:.2%}</b>, and Sharpe is <b>{metrics['Sharpe Ratio']:.2f}</b>. These are historical measures, not guarantees of future performance.")
+explanation(f"<b>Quick read:</b> {selected} is at <b>₹{price:,.2f}</b>. Historical annual return is <b>{metrics['Annual Return']:.2%}</b>, volatility is <b>{metrics['Annual Volatility']:.2%}</b>, and Sharpe ratio is <b>{metrics['Sharpe Ratio']:.2f}</b>. These are historical measures, not guarantees of future performance.")
 
 st.header("1. Price & Technical Analysis")
 st.markdown('<div class="note">Trend, moving averages, volatility bands and momentum indicators.</div>', unsafe_allow_html=True)
@@ -190,30 +190,7 @@ if returns.shape[1] >= 3:
 else:
     st.warning("At least three peer return series are required to build the Efficient Frontier.")
 
-st.header("5. Monte Carlo Scenario Simulation")
-st.markdown('<div class="note">A probabilistic 1-year price-path simulation based on historical daily return and volatility.</div>', unsafe_allow_html=True)
-sims = st.slider("Number of simulations",1000,10000,3000,500,key="mc_sims")
-days = 252
-hist_ret = daily_returns(close).dropna()
-mu_daily = float(hist_ret.mean())
-sigma_daily = float(hist_ret.std())
-rng = np.random.default_rng(42)
-shocks = rng.normal(mu_daily,sigma_daily,size=(days,sims))
-paths = price * np.exp(np.cumsum(shocks,axis=0))
-finals = paths[-1]
-percentiles = np.percentile(finals,[5,25,50,75,95])
-mcfig = go.Figure()
-step = max(1,sims//80)
-mcfig.add_trace(go.Scatter(x=np.arange(days), y=paths[:,::step], mode="lines", line=dict(width=1), opacity=.18, showlegend=False))
-mcfig.add_trace(go.Scatter(x=np.arange(days), y=np.median(paths,axis=1), mode="lines", line=dict(width=3), name="Median path"))
-mcfig.add_hline(y=price,line_dash="dash",annotation_text="Current price")
-mcfig.update_layout(template="plotly_dark",height=520,title=f"{selected}: 1-Year Monte Carlo Price Paths",xaxis_title="Trading Days",yaxis_title="Simulated Price",hovermode="x unified")
-st.plotly_chart(mcfig,use_container_width=True,theme=None)
-mc_table = pd.DataFrame({"Scenario":["5th percentile","25th percentile","Median","75th percentile","95th percentile"],"Simulated price":percentiles})
-st.dataframe(mc_table,use_container_width=True,hide_index=True)
-explanation(f"The simulation uses <b>{sims:,} trials</b> and the selected company's historical daily return distribution. The median simulated ending price is <b>₹{percentiles[2]:,.2f}</b>; the 5th–95th percentile range is <b>₹{percentiles[0]:,.2f}–₹{percentiles[4]:,.2f}</b>. These are scenarios, not predicted prices.")
-
-st.header("6. Black-Scholes Option Valuation")
+st.header("5. Black-Scholes Option Valuation")
 st.markdown('<div class="note">Theoretical European call and put values using current price and historical volatility.</div>', unsafe_allow_html=True)
 b1,b2,b3,b4 = st.columns(4)
 with b1: strike = st.number_input("Strike price (₹)",min_value=0.01,value=round(price,2),step=1.0)
